@@ -74,26 +74,13 @@ class ExclusionZones():
         ra_clean, dec_clean = ra[pointMask], dec[pointMask]
         return ra_clean, dec_clean
 
-def makeWTheta(cat, debug=False):
+def makeWTheta(table, debug=False):
     '''
-    given a treecorr catalog with ra and dec columns, compute w of theta and make a plot
+    given a astropy table with ra and dec columns, compute w of theta and make a plot
     '''
-    dd = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
-    dd.process(cat)
 
     #make a random catalog so we can compute the 2 point correlation
-
-    ra_min = np.min(cat.ra)
-    ra_max = np.max(cat.ra)
-    dec_min = np.min(cat.dec)
-    dec_max = np.max(cat.dec)
-    if debug:
-        print('ra range = %f .. %f' % (ra_min, ra_max))
-        print('dec range = %f .. %f' % (dec_min, dec_max))
-
-    rand_ra = np.random.uniform(ra_min, ra_max, 6*cat.ntot)
-    rand_sindec = np.random.uniform(np.sin(dec_min), np.sin(dec_max), 6*cat.ntot)
-    rand_dec = np.arcsin(rand_sindec)
+    rand_ra, rand_dec = genRandoms(table['alpha']*(np.pi/180), table['delta']*(np.pi/180))
     
     
     #sanitize randoms
@@ -101,19 +88,12 @@ def makeWTheta(cat, debug=False):
         ez = ExclusionZones('F2',subfield)
         rand_ra, rand_dec = ez.flagPoints(rand_ra, rand_dec, unit='rad')
         print('finished %s' % subfield)
-    ##################
     
-    rand = treecorr.Catalog(ra=rand_ra, dec=rand_dec, ra_units='radians', dec_units='radians')
-    rr = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
-    rr.process(rand)
+    #create the treecorr data catalog
+    cat = astpyToCorr(table)
 
-    r = np.exp(dd.meanlogr)
-
-    dr = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
-    dr.process(cat, rand)
-
-    xi, varxi = dd.calculateXi(rr, dr)
-    sig = np.sqrt(varxi)
+    #calculate w of theta given our sanitized randoms and catalog data
+    xi, varxi, sig, r = doTreeCorr(cat, rand_ra, rand_dec)
     
     if debug:
         f, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,7))
@@ -130,7 +110,46 @@ def makeWTheta(cat, debug=False):
         ax2.set_ylabel('Dec (degrees)')
         ax2.set_title('Data on top of randoms')
 
+    plt.show()
+
     return {"xi":xi, "varxi": varxi, "sig":sig, "r":r, "rand_ra": rand_ra, "rand_dec": rand_dec}
+
+def genRandoms(ra, dec, debug=True):
+    ra_min = np.min(ra)
+    ra_max = np.max(ra)
+    dec_min = np.min(dec)
+    dec_max = np.max(dec)
+    ntot = ra.size
+
+    if debug:
+        print('ra range = %f .. %f' % (ra_min, ra_max))
+        print('dec range = %f .. %f' % (dec_min, dec_max))
+
+    rand_ra = np.random.uniform(ra_min, ra_max, 6*ntot)
+    rand_sindec = np.random.uniform(np.sin(dec_min), np.sin(dec_max), 6*ntot)
+    rand_dec = np.arcsin(rand_sindec)
+    return rand_ra, rand_dec
+
+def astpyToCorr(table):
+    cat = treecorr.Catalog(ra=table['alpha'].data, dec=table['delta'].data,
+                         ra_units='deg', dec_units='deg', g1=table['e1'], g2=table['e2'])
+    return cat
+
+def doTreeCorr(cat, rand_ra, rand_dec):
+    dd = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
+    dd.process(cat)
+    rand = treecorr.Catalog(ra=rand_ra, dec=rand_dec, ra_units='radians', dec_units='radians')
+    rr = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
+    rr.process(rand)
+
+    r = np.exp(dd.meanlogr)
+
+    dr = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
+    dr.process(cat, rand)
+
+    xi, varxi = dd.calculateXi(rr, dr)
+    sig = np.sqrt(varxi)
+    return xi, varxi, sig, r
 
 def makePlot(xi, varxi, sig, r):
     plt.style.use('seaborn-poster')
@@ -146,6 +165,7 @@ def makePlot(xi, varxi, sig, r):
 
     plt.legend([leg], [r'$w(\theta)$'], loc='lower left')
     plt.xlim([0.01,2])
+    plt.show()
     return
 
         
