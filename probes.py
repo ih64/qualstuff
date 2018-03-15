@@ -74,7 +74,7 @@ class ExclusionZones():
         ra_clean, dec_clean = ra[pointMask], dec[pointMask]
         return ra_clean, dec_clean
 
-def makeWTheta(table, debug=False):
+def calcProbes(table, debug=False):
     '''
     given a astropy table with ra and dec columns, compute w of theta and make a plot
     '''
@@ -117,7 +117,7 @@ def makeWTheta(table, debug=False):
         cat = astpyToCorr(table[~kmeanMask])
 
         #calculate w of theta given our sanitized randoms and catalog data
-        xi, varxi, sig, r = doTreeCorr(cat, rand_ra[~rand_mask], rand_dec[~rand_mask])
+        xi, varxi, sig, r = getWTheta(cat, rand_ra[~rand_mask], rand_dec[~rand_mask])
         xi_list.append(xi)
         varxi_list.append(varxi)
         sig_list.append(sig)
@@ -166,7 +166,7 @@ def astpyToCorr(table):
                          ra_units='deg', dec_units='deg', g1=table['e1'], g2=table['e2'])
     return cat
 
-def doTreeCorr(cat, rand_ra, rand_dec):
+def getWTheta(cat, rand_ra, rand_dec):
     dd = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
     dd.process(cat)
     rand = treecorr.Catalog(ra=rand_ra, dec=rand_dec, ra_units='radians', dec_units='radians')
@@ -181,6 +181,11 @@ def doTreeCorr(cat, rand_ra, rand_dec):
     xi, varxi = dd.calculateXi(rr, dr)
     sig = np.sqrt(varxi)
     return xi, varxi, sig, r
+
+def getGGL(lensCat, sourceCat):
+    NGobj = treecorr.NGCorrelation(min_sep=0.1, max_sep=100, nbins=20, sep_units='arcmin')
+    NGobj.process(lensCat, sourceCat)
+    return NGobj
 
 def getKmeans(ra, dec, n_clusters=16):
     kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit_predict(np.stack([ra, dec], axis=-1))
