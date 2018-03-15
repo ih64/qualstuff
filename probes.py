@@ -89,30 +89,61 @@ def makeWTheta(table, debug=False):
         rand_ra, rand_dec = ez.flagPoints(rand_ra, rand_dec, unit='rad')
         print('finished %s' % subfield)
     
-    #create the treecorr data catalog
-    cat = astpyToCorr(table)
+    #find some centers in the data. we will use this to jacknife resample
+    #later on
+    kmeans = getKmeans(table['alpha'],table['delta'], n_clusters=16)
 
-    #calculate w of theta given our sanitized randoms and catalog data
-    xi, varxi, sig, r = doTreeCorr(cat, rand_ra, rand_dec)
-    
-    if debug:
-        f, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,7))
-        ax1.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
-        ax1.scatter(rand_ra * 180/np.pi, rand_dec * 180/np.pi, color='green', s=0.1)
-        ax1.set_xlabel('RA (degrees)')
-        ax1.set_ylabel('Dec (degrees)')
-        ax1.set_title('Randoms on top of data')
+    ####
 
-        # Repeat in the opposite order
-        ax2.scatter(rand_ra * 180/np.pi, rand_dec * 180/np.pi, color='green', s=0.1)
-        ax2.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
-        ax2.set_xlabel('RA (degrees)')
-        ax2.set_ylabel('Dec (degrees)')
-        ax2.set_title('Data on top of randoms')
+    xi_list = []
+    varxi_list = []
+    sig_list = []
+    r_list = []
+    k_list = [k for k in np.unique(kmeans)]
 
-    plt.show()
+    for k in k_list:
+        kmra_max = table['alpha'][kmeans == k].max()
+        kmra_min = table['alpha'][kmeans == k].min()
+        kmdec_max = table['delta'][kmeans == k].max()
+        kmdec_min = table['delta'][kmeans == k].min()
+        kmeanMask = (table['alpha'] > kmra_min) & (table['alpha'] < kmra_max) \
+            & (table['delta'] > kmdec_min) & (table['delta'] < kmdec_max)
+        
+        rand_mask = (rand_ra > kmra_min*(np.pi/180)) & (rand_ra < kmra_max*(np.pi/180)) \
+                 & (rand_dec > kmdec_min*(np.pi/180)) & (rand_dec < kmdec_max*(np.pi/180))
+        ####
 
-    return {"xi":xi, "varxi": varxi, "sig":sig, "r":r, "rand_ra": rand_ra, "rand_dec": rand_dec}
+        #create the treecorr data catalog
+        cat = astpyToCorr(table[~kmeanMask])
+
+        #calculate w of theta given our sanitized randoms and catalog data
+        xi, varxi, sig, r = doTreeCorr(cat, rand_ra[~rand_mask], rand_dec[~rand_mask])
+        xi_list.append(xi)
+        varxi_list.append(varxi)
+        sig_list.append(sig)
+        r_list.append(r)
+
+        if debug:
+            f, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,7))
+            ax1.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
+            ax1.scatter(rand_ra[~rand_mask] * 180/np.pi,
+                rand_dec[~rand_mask] * 180/np.pi, color='green', s=0.1)
+            ax1.set_xlabel('RA (degrees)')
+            ax1.set_ylabel('Dec (degrees)')
+            ax1.set_title('Randoms on top of data')
+
+            # Repeat in the opposite order
+            ax2.scatter(rand_ra[[~rand_mask]] * 180/np.pi,
+                rand_dec[~rand_mask]* 180/np.pi, color='green', s=0.1)
+            ax2.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
+            ax2.set_xlabel('RA (degrees)')
+            ax2.set_ylabel('Dec (degrees)')
+            ax2.set_title('Data on top of randoms')
+
+        plt.show()
+
+    return {"xi":xi_list, "varxi": varxi_list, "sig":sig_list,
+        "r":r_list, "rand_ra": rand_ra, "rand_dec": rand_dec}
 
 def genRandoms(ra, dec, debug=True):
     ra_min = np.min(ra)
@@ -151,12 +182,17 @@ def doTreeCorr(cat, rand_ra, rand_dec):
     sig = np.sqrt(varxi)
     return xi, varxi, sig, r
 
+def getKmeans(ra, dec, n_clusters=16):
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit_predict(np.stack([ra, dec], axis=-1))
+    return kmeans
+    
+
 def makePlot(xi, varxi, sig, r):
     plt.style.use('seaborn-poster')
     plt.plot(r, xi, color='blue')
     plt.plot(r, -xi, color='blue', ls=':')
-    plt.errorbar(r[xi>0], xi[xi>0], yerr=sig[xi>0], color='blue', lw=0.1, ls='')
-    plt.errorbar(r[xi<0], -xi[xi<0], yerr=sig[xi<0], color='blue', lw=0.1, ls='')
+    plt.errorbar(r[xi>0], xi[xi>0], yerr=sig[xi>0], color='blue', ls='')
+    plt.errorbar(r[xi<0], -xi[xi<0], yerr=sig[xi<0], color='blue', ls='')
     leg = plt.errorbar(-r, xi, yerr=sig, color='blue')
 
     plt.xscale('log')
