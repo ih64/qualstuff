@@ -96,7 +96,6 @@ def calcProbes(table, debug=False):
     ####
 
     xi_list = []
-    varxi_list = []
     sig_list = []
     r_list = []
     k_list = [k for k in np.unique(kmeans)]
@@ -117,9 +116,8 @@ def calcProbes(table, debug=False):
         cat = astpyToCorr(table[~kmeanMask])
 
         #calculate w of theta given our sanitized randoms and catalog data
-        xi, varxi, sig, r = getWTheta(cat, rand_ra[~rand_mask], rand_dec[~rand_mask])
+        xi, sig, r = getWTheta(cat, rand_ra[~rand_mask], rand_dec[~rand_mask])
         xi_list.append(xi)
-        varxi_list.append(varxi)
         sig_list.append(sig)
         r_list.append(r)
 
@@ -142,7 +140,7 @@ def calcProbes(table, debug=False):
 
         plt.show()
 
-    return {"xi":xi_list, "varxi": varxi_list, "sig":sig_list,
+    return {"xi":xi_list, "sig":sig_list,
         "r":r_list, "rand_ra": rand_ra, "rand_dec": rand_dec}
 
 def genRandoms(ra, dec, debug=True):
@@ -162,11 +160,32 @@ def genRandoms(ra, dec, debug=True):
     return rand_ra, rand_dec
 
 def astpyToCorr(table):
+    """
+    turn an astropy table into a treecorr catalog
+    anticipating certain format form astropy catalog
+    """
     cat = treecorr.Catalog(ra=table['alpha'].data, dec=table['delta'].data,
                          ra_units='deg', dec_units='deg', g1=table['e1'], g2=table['e2'])
     return cat
 
 def getWTheta(cat, rand_ra, rand_dec):
+    """
+    calculate the angular two point correlation function using the landay-sazlay estimator
+
+    note: rand_ra and rand_dec should sample the same space on the sky as the data
+        to accurately calculate w of theta
+    
+    parameters
+    cat: treecorr catalog of galaxies we will calculate w of theta for.
+    rand_ra: numpy array. uniformly random sampled coordinates in RA space. 
+    rand_dec: numpy array. uniformly random sampled coordinates in DEC space
+
+    returns:
+    xi: numpy array. the angular two point correlation function
+    sig: numpy array. xi's std dev noise estimated from treecor. underestimated error 
+    r: numpy array of angular bins xi is calculated for
+    """
+
     dd = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
     dd.process(cat)
     rand = treecorr.Catalog(ra=rand_ra, dec=rand_dec, ra_units='radians', dec_units='radians')
@@ -180,7 +199,7 @@ def getWTheta(cat, rand_ra, rand_dec):
 
     xi, varxi = dd.calculateXi(rr, dr)
     sig = np.sqrt(varxi)
-    return xi, varxi, sig, r
+    return xi, sig, r
 
 def getGGL(lensCat, sourceCat):
     """
@@ -191,8 +210,10 @@ def getGGL(lensCat, sourceCat):
     sourceCat: TreeCorr catalog of source galaxies. must have positions and shear specified
 
     returns
-    GGL : galaxy galaxy lens treecorr object. holds information on tangentail shear for lenses
-    nullGGL : galaxy galaxy lens treecorr object. swap shear and lens planes and calculate tangential shear
+    GGL : galaxy galaxy lens treecorr object. 
+        holds information on tangentail shear for lenses
+    nullGGL : galaxy galaxy lens treecorr object. 
+        swap shear and lens planes and calculate tangential shear
         nice null test for photo-zs
     """
     GGL = treecorr.NGCorrelation(min_sep=0.1, max_sep=100, nbins=20, sep_units='arcmin')
@@ -203,11 +224,24 @@ def getGGL(lensCat, sourceCat):
     return GGL, nullGGL
 
 def getKmeans(ra, dec, n_clusters=16):
+    """
+    use kmeans algorithm to find clusters in data
+    useful for jacknife
+
+    input:
+    ra: numpy array. ra positions for data
+    dec: numpy array. dec positions for data
+
+    returns:
+    kmeans: numpy array, same length as ra and dec. 
+    tells you which cluster a point in ra,dec
+    belongs too
+    """
     kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit_predict(np.stack([ra, dec], axis=-1))
     return kmeans
     
 
-def makePlot(xi, varxi, sig, r):
+def makePlot(xi, sig, r):
     plt.style.use('seaborn-poster')
     plt.plot(r, xi, color='blue')
     plt.plot(r, -xi, color='blue', ls=':')
