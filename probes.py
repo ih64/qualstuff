@@ -183,9 +183,24 @@ def getWTheta(cat, rand_ra, rand_dec):
     return xi, varxi, sig, r
 
 def getGGL(lensCat, sourceCat):
-    NGobj = treecorr.NGCorrelation(min_sep=0.1, max_sep=100, nbins=20, sep_units='arcmin')
-    NGobj.process(lensCat, sourceCat)
-    return NGobj
+    """
+    calculate galaxy galaxy lensing
+
+    parameters
+    lensCat: TreeCorr catalog of lens galaxies. must have positions and shear specified 
+    sourceCat: TreeCorr catalog of source galaxies. must have positions and shear specified
+
+    returns
+    GGL : galaxy galaxy lens treecorr object. holds information on tangentail shear for lenses
+    nullGGL : galaxy galaxy lens treecorr object. swap shear and lens planes and calculate tangential shear
+        nice null test for photo-zs
+    """
+    GGL = treecorr.NGCorrelation(min_sep=0.1, max_sep=100, nbins=20, sep_units='arcmin')
+    GGL.process(lensCat, sourceCat)
+
+    nullGGL = treecorr.NGCorrelation(min_sep=0.1, max_sep=100, nbins=20, sep_units='arcmin')
+    nullGGL.process(sourceCat, lensCat)
+    return GGL, nullGGL
 
 def getKmeans(ra, dec, n_clusters=16):
     kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit_predict(np.stack([ra, dec], axis=-1))
