@@ -19,11 +19,13 @@ class ExclusionZones():
         self.subfield = subfield
         self.exRegPath = os.path.join(self.basePath, 'regfiles',self.field+self.subfield+'R.all.2009.reg')
         self.edgeRegPath = os.path.join(self.basePath, 'regfiles',self.field+self.subfield+'.edge.reg')
+        self.centRegPath = os.path.join(self.basePath, 'regfiles',self.field+self.subfield+'Center.reg')
         self.imagePath = os.path.join(self.basePath, 'Stacks',self.field, self.subfield, 'dlsmake.fits')
         
         self.wcs = self._getWCS(self.imagePath)
         self.regionList = self._parseExReg(self.exRegPath)
         self.regionList += self._parseEdgeReg(self.edgeRegPath)
+        self.regionCenter = self._readCenterReg(self.centRegPath)[0]
         
     def _getWCS(self,filename):
         hdu = fits.open(filename)
@@ -31,6 +33,10 @@ class ExclusionZones():
         w = WCS(hdu[0].header)
         return w
     
+    def _readCenterReg(self,filename):
+        cntReg = regions.read_ds9(filename)
+        return cntReg
+
     def _parseExReg(self,filename):
 
         with open(filename,'r') as f:
@@ -74,49 +80,48 @@ class ExclusionZones():
         ra_clean, dec_clean = ra[pointMask], dec[pointMask]
         return ra_clean, dec_clean
 
+    def interiorPoints(self, ra, dec, unit):
+        containsMask = self.regionCenter.contains(SkyCoord(ra, dec, unit=unit), self.wcs)
+        #only keep points inside the center region
+        #were cutting out any points that land in gutters here
+        return containsMask
+
+
 def calcProbes(table, debug=False):
     '''
     given a astropy table with ra and dec columns, compute w of theta and make a plot
     '''
 
-    #make a random catalog so we can compute the 2 point correlation
-    rand_ra, rand_dec = genRandoms(table['alpha']*(np.pi/180), table['delta']*(np.pi/180))
-    
-    
-    #sanitize randoms
-    for subfield in ('p11','p12', 'p13', 'p21', 'p22', 'p23', 'p31', 'p32', 'p33'):
-        ez = ExclusionZones('F2',subfield)
-        rand_ra, rand_dec = ez.flagPoints(rand_ra, rand_dec, unit='rad')
-        print('finished %s' % subfield)
-    
-    #find some centers in the data. we will use this to jacknife resample
-    #later on
-    kmeans = getKmeans(table['alpha'],table['delta'], n_clusters=16)
-
-    ####
-
     xi_list = []
     sig_list = []
     r_list = []
-    k_list = [k for k in np.unique(kmeans)]
+    
+    
+    for subfield in ('p11','p12', 'p13', 'p21', 'p22', 'p23', 'p31', 'p32', 'p33'):
 
-    for k in k_list:
-        kmra_max = table['alpha'][kmeans == k].max()
-        kmra_min = table['alpha'][kmeans == k].min()
-        kmdec_max = table['delta'][kmeans == k].max()
-        kmdec_min = table['delta'][kmeans == k].min()
-        kmeanMask = (table['alpha'] > kmra_min) & (table['alpha'] < kmra_max) \
-            & (table['delta'] > kmdec_min) & (table['delta'] < kmdec_max)
-        
-        rand_mask = (rand_ra > kmra_min*(np.pi/180)) & (rand_ra < kmra_max*(np.pi/180)) \
-                 & (rand_dec > kmdec_min*(np.pi/180)) & (rand_dec < kmdec_max*(np.pi/180))
-        ####
+        #iterate sources subfield by subfield
+        subTable = table[table['subfield'] == 'F2'+subfield]
 
+        #make a random catalog so we can compute the 2 point correlation
+        rand_ra, rand_dec = genRandoms(subTable['alpha']*(np.pi/180), subTable['delta']*(np.pi/180))
+
+        #sanatize randoms
+        ez = ExclusionZones('F2',subfield)
+        rand_ra, rand_dec = ez.flagPoints(rand_ra, rand_dec, unit='rad')
+        #deal w gutter regions
+        randsInsideMask = ez.interiorPoints(rand_ra, rand_dec, unit='rad')
+        rand_ra = rand_ra[randsInsideMask]
+        rand_dec = rand_dec[randsInsideMask]
+
+        #sanitize data
+        dataInsideMask = ez.interiorPoints(subTable['alpha'], subTable['delta'], unit='deg')
+        #deal w gutter regions
+        subTable = subTable[dataInsideMask]
         #create the treecorr data catalog
-        cat = astpyToCorr(table[~kmeanMask])
+        cat = astpyToCorr(subTable)
 
         #calculate w of theta given our sanitized randoms and catalog data
-        xi, sig, r = getWTheta(cat, rand_ra[~rand_mask], rand_dec[~rand_mask])
+        xi, sig, r = getWTheta(cat, rand_ra, rand_dec)
         xi_list.append(xi)
         sig_list.append(sig)
         r_list.append(r)
@@ -124,21 +129,23 @@ def calcProbes(table, debug=False):
         if debug:
             f, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,7))
             ax1.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
-            ax1.scatter(rand_ra[~rand_mask] * 180/np.pi,
-                rand_dec[~rand_mask] * 180/np.pi, color='green', s=0.1)
+            ax1.scatter(rand_ra* 180/np.pi,
+                rand_dec* 180/np.pi, color='green', s=0.1)
             ax1.set_xlabel('RA (degrees)')
             ax1.set_ylabel('Dec (degrees)')
             ax1.set_title('Randoms on top of data')
 
             # Repeat in the opposite order
-            ax2.scatter(rand_ra[[~rand_mask]] * 180/np.pi,
-                rand_dec[~rand_mask]* 180/np.pi, color='green', s=0.1)
+            ax2.scatter(rand_ra * 180/np.pi,
+                rand_dec * 180/np.pi, color='green', s=0.1)
             ax2.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
             ax2.set_xlabel('RA (degrees)')
             ax2.set_ylabel('Dec (degrees)')
             ax2.set_title('Data on top of randoms')
 
-        plt.show()
+            plt.show()
+
+        print('finished %s' % subfield)
 
     return {"xi":xi_list, "sig":sig_list,
         "r":r_list, "rand_ra": rand_ra, "rand_dec": rand_dec}
@@ -186,15 +193,15 @@ def getWTheta(cat, rand_ra, rand_dec):
     r: numpy array of angular bins xi is calculated for
     """
 
-    dd = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
+    dd = treecorr.NNCorrelation(min_sep=0.1, max_sep=50, nbins=15, sep_units='arcmin')
     dd.process(cat)
     rand = treecorr.Catalog(ra=rand_ra, dec=rand_dec, ra_units='radians', dec_units='radians')
-    rr = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
+    rr = treecorr.NNCorrelation(min_sep=0.1, max_sep=50, nbins=15, sep_units='arcmin')
     rr.process(rand)
 
     r = np.exp(dd.meanlogr)
 
-    dr = treecorr.NNCorrelation(min_sep=0.01, max_sep=2, bin_size=0.2, sep_units='degrees')
+    dr = treecorr.NNCorrelation(min_sep=0.1, max_sep=50, nbins=15, sep_units='arcmin')
     dr.process(cat, rand)
 
     xi, varxi = dd.calculateXi(rr, dr)
@@ -251,10 +258,10 @@ def makePlot(xi, sig, r):
 
     plt.xscale('log')
     plt.yscale('log', nonposy='clip')
-    plt.xlabel(r'$\theta$ (degrees)')
+    plt.xlabel(r'$\theta$ (arcmin)')
 
     plt.legend([leg], [r'$w(\theta)$'], loc='lower left')
-    plt.xlim([0.01,2])
+#    plt.xlim([0.01,2])
     plt.show()
     return
 
