@@ -61,8 +61,9 @@ class ExclusionZones():
                     ra = np.float(ra[3:])
                     dec = np.float(dec[4:])
                     rec = regions.RectangleSkyRegion(center=SkyCoord(ra, dec, unit='deg'),
-                                       width=Angle(.265*np.float(w), 'arcsec'), height=Angle(.265*np.float(h), 'arcsec'),
-                                       angle=Angle(270, 'deg'))
+                                width=Angle(.265*np.float(w), 'arcsec'),
+                                height=Angle(.265*np.float(h), 'arcsec'),
+                                angle=Angle(270, 'deg'))
                     reglist.append(rec)
 
         return reglist
@@ -95,6 +96,7 @@ def calcProbes(table, debug=False):
     xi_list = []
     sig_list = []
     r_list = []
+    Coffset_list = []
     
     
     for subfield in ('p11','p12', 'p13', 'p21', 'p22', 'p23', 'p31', 'p32', 'p33'):
@@ -121,10 +123,11 @@ def calcProbes(table, debug=False):
         cat = astpyToCorr(subTable)
 
         #calculate w of theta given our sanitized randoms and catalog data
-        xi, sig, r = getWTheta(cat, rand_ra, rand_dec)
+        xi, sig, r, Coffset = getWTheta(cat, rand_ra, rand_dec)
         xi_list.append(xi)
         sig_list.append(sig)
         r_list.append(r)
+        Coffset_list.append(Coffset)
 
         if debug:
             f, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,7))
@@ -147,8 +150,8 @@ def calcProbes(table, debug=False):
 
         print('finished %s' % subfield)
 
-    return {"xi":xi_list, "sig":sig_list,
-        "r":r_list, "rand_ra": rand_ra, "rand_dec": rand_dec}
+    return {"xi":xi_list, "sig":sig_list, "r":r_list,
+        "rand_ra": rand_ra, "rand_dec": rand_dec, "Coffset":Coffset_list}
 
 def genRandoms(ra, dec, debug=True):
     ra_min = np.min(ra)
@@ -174,6 +177,16 @@ def astpyToCorr(table):
     cat = treecorr.Catalog(ra=table['alpha'].data, dec=table['delta'].data,
                          ra_units='deg', dec_units='deg', g1=table['e1'], g2=table['e2'])
     return cat
+
+def calcC(RR):
+    NN = RR.weight
+    theta = np.exp(RR.meanlogr)
+
+    numerator = NN*np.power(theta, -.8)
+
+    C = numerator.sum()/NN.sum()
+    return C
+
 
 def getWTheta(cat, rand_ra, rand_dec):
     """
@@ -206,7 +219,9 @@ def getWTheta(cat, rand_ra, rand_dec):
 
     xi, varxi = dd.calculateXi(rr, dr)
     sig = np.sqrt(varxi)
-    return xi, sig, r
+
+    Coffset = calcC(rr)
+    return xi, sig, r, Coffset
 
 def getGGL(lensCat, sourceCat):
     """
