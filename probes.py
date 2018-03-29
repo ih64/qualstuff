@@ -88,7 +88,7 @@ class ExclusionZones():
         return containsMask
 
 
-def calcProbes(table, debug=False):
+def calcProbes(table, debug=False, gutter=False):
     '''
     given a astropy table with ra and dec columns, compute w of theta and make a plot
     '''
@@ -99,31 +99,61 @@ def calcProbes(table, debug=False):
     Coffset_list = []
     
     
+    #find kmeans centers
+    kIdxs = getKmeans(table['alpha'], table['delta'], n_clusters=9)
+
+    #make a random catalog so we can compute the 2 point correlation
+    rand_ra, rand_dec = genRandoms(table['alpha']*(np.pi/180), table['delta']*(np.pi/180))
+
+    #sanatize randoms subfield by subfield to remove any randoms that 
+    #happen to fall in exclusion regions
     for subfield in ('p11','p12', 'p13', 'p21', 'p22', 'p23', 'p31', 'p32', 'p33'):
-
-        #iterate sources subfield by subfield
-        subTable = table[table['subfield'] == 'F2'+subfield]
-
-        #make a random catalog so we can compute the 2 point correlation
-        rand_ra, rand_dec = genRandoms(subTable['alpha']*(np.pi/180), subTable['delta']*(np.pi/180))
 
         #sanatize randoms
         ez = ExclusionZones('F2',subfield)
+        #this will return randoms that are outside of exlusion regions
         rand_ra, rand_dec = ez.flagPoints(rand_ra, rand_dec, unit='rad')
-        #deal w gutter regions
-        randsInsideMask = ez.interiorPoints(rand_ra, rand_dec, unit='rad')
-        rand_ra = rand_ra[randsInsideMask]
-        rand_dec = rand_dec[randsInsideMask]
+        #if gutter is True, we will also remove any randoms in the gutter regions
+        #for now just keep it False
+        if gutter:
+            #deal w gutter regions
+            randsInsideMask = ez.interiorPoints(rand_ra, rand_dec, unit='rad')
+            rand_ra = rand_ra[randsInsideMask]
+            rand_dec = rand_dec[randsInsideMask]
+
+        print('finished %s' % subfield)
+
+    #make some kmeans in the real catalog. this will be useful for jack knife resampling
+    ks = np.unique(kIdxs)
+
+    for k in ks:
+        #make a subtable for data for the kth cluster alone
+        clusterTable = table[kIdxs == k]
+        dataRaMax, dataRaMin = (clusterTable['alpha'].max(), clusterTable['alpha'].min())
+        dataDecMax, dataDecMin = (clusterTable['delta'].max(), clusterTable['delta'].min())
+
+        #cut out a box of the data
+        dataInsideBox = (table['alpha'] > dataRaMin) & (table['alpha'] < dataRaMax) & (table['delta'] > dataDecMin) & (table['delta'] < dataDecMax)
+        subTable = table[~dataInsideBox]
+
+        #cut out a the same box from the randoms
+        randInsideBox = (rand_ra > dataRaMin*(np.pi/180.)) & (rand_ra < dataRaMax*(np.pi/180.)) & (rand_dec > dataDecMin*(np.pi/180.)) & (rand_dec < dataDecMax*(np.pi/180.))
+
+
+        #do stuff for jackknifing
+        ###TODO###
+        ##########
+        #deal with not gutter stuff for data
 
         #sanitize data
-        dataInsideMask = ez.interiorPoints(subTable['alpha'], subTable['delta'], unit='deg')
+        #dataInsideMask = ez.interiorPoints(subTable['alpha'], subTable['delta'], unit='deg')
         #deal w gutter regions
-        subTable = subTable[dataInsideMask]
+        #subTable = subTable[dataInsideMask]
         #create the treecorr data catalog
         cat = astpyToCorr(subTable)
 
         #calculate w of theta given our sanitized randoms and catalog data
-        xi, sig, r, Coffset = getWTheta(cat, rand_ra, rand_dec)
+        xi, sig, r, Coffset = getWTheta(cat, rand_ra[~randInsideBox], rand_dec[~randInsideBox])
         xi_list.append(xi)
         sig_list.append(sig)
         r_list.append(r)
@@ -132,23 +162,21 @@ def calcProbes(table, debug=False):
         if debug:
             f, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,7))
             ax1.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
-            ax1.scatter(rand_ra* 180/np.pi,
-                rand_dec* 180/np.pi, color='green', s=0.1)
+            ax1.scatter(rand_ra[~randInsideBox]* 180/np.pi,
+                rand_dec[~randInsideBox]* 180/np.pi, color='green', s=0.1)
             ax1.set_xlabel('RA (degrees)')
             ax1.set_ylabel('Dec (degrees)')
             ax1.set_title('Randoms on top of data')
 
             # Repeat in the opposite order
-            ax2.scatter(rand_ra * 180/np.pi,
-                rand_dec * 180/np.pi, color='green', s=0.1)
+            ax2.scatter(rand_ra[~randInsideBox] * 180/np.pi,
+                rand_dec[~randInsideBox] * 180/np.pi, color='green', s=0.1)
             ax2.scatter(cat.ra * 180/np.pi, cat.dec * 180/np.pi, color='blue', s=0.1)
             ax2.set_xlabel('RA (degrees)')
             ax2.set_ylabel('Dec (degrees)')
             ax2.set_title('Data on top of randoms')
 
             plt.show()
-
-        print('finished %s' % subfield)
 
     return {"xi":xi_list, "sig":sig_list, "r":r_list,
         "rand_ra": rand_ra, "rand_dec": rand_dec, "Coffset":Coffset_list}
