@@ -88,7 +88,7 @@ class ExclusionZones():
         return containsMask
 
 
-def calcProbes(table, debug=False, gutter=False):
+def calcProbes(table, thresh, debug=False, gutter=False):
     '''
     given a astropy table with ra and dec columns, compute w of theta and make a plot
     '''
@@ -123,6 +123,11 @@ def calcProbes(table, debug=False, gutter=False):
 
         print('finished %s' % subfield)
 
+    #depth correction for randoms
+    rand_ra, rand_dec = depthCorrection(rand_ra*(180/np.pi), rand_dec*(180/np.pi), thresh)
+
+    rand_ra *= (np.pi/180.)
+    rand_dec *= (np.pi/180.)
     #make some kmeans in the real catalog. this will be useful for jack knife resampling
     ks = np.unique(kIdxs)
 
@@ -234,15 +239,15 @@ def getWTheta(cat, rand_ra, rand_dec):
     r: numpy array of angular bins xi is calculated for
     """
 
-    dd = treecorr.NNCorrelation(min_sep=0.1, max_sep=50, nbins=15, sep_units='arcmin')
+    dd = treecorr.NNCorrelation(min_sep=0.1, max_sep=120, nbins=20, sep_units='arcmin')
     dd.process(cat)
     rand = treecorr.Catalog(ra=rand_ra, dec=rand_dec, ra_units='radians', dec_units='radians')
-    rr = treecorr.NNCorrelation(min_sep=0.1, max_sep=50, nbins=15, sep_units='arcmin')
+    rr = treecorr.NNCorrelation(min_sep=0.1, max_sep=120, nbins=20, sep_units='arcmin')
     rr.process(rand)
 
     r = np.exp(dd.meanlogr)
 
-    dr = treecorr.NNCorrelation(min_sep=0.1, max_sep=50, nbins=15, sep_units='arcmin')
+    dr = treecorr.NNCorrelation(min_sep=0.1, max_sep=120, nbins=20, sep_units='arcmin')
     dr.process(cat, rand)
 
     xi, varxi = dd.calculateXi(rr, dr)
@@ -250,6 +255,32 @@ def getWTheta(cat, rand_ra, rand_dec):
 
     Coffset = calcC(rr)
     return xi, sig, r, Coffset
+
+def depthCorrection(ra, dec, thresh):
+    #tells you if points are outside of gutter regions
+    insideMask = (((ra > 140.36396) & (ra < 140.94295) & (dec > 30.42135) & (dec < 30.89329))|
+    ((ra > 139.60295) & (ra < 140.18853) & (dec > 30.412424) & (dec < 30.926812)) | 
+    ((ra > 138.84335) & (ra < 139.38958) & (dec > 30.41159) & (dec < 30.903774)) |  
+    ((ra > 140.32337) & (ra < 140.98905) & (dec > 29.752018) & (dec < 30.258278)) | 
+    ((ra > 139.60984) & (ra < 140.179) & (dec > 29.7508) & (dec < 30.271778)) | 
+    ((ra > 138.84105) & (ra < 139.37342) & (dec > 29.750473) & (dec < 30.270257)) | 
+    ((ra > 140.35659) & (ra < 140.93803) & (dec > 29.090013) & (dec < 29.58593)) | 
+    ((ra > 139.6101) & (ra < 140.15043) & (dec > 29.097732) & (dec < 29.575289)) | 
+    ((ra > 138.89651) & (ra < 139.4029) & (dec > 29.086432) & (dec < 29.590978)))
+
+    rand_ra = ra[insideMask]
+    rand_dec = dec[insideMask]
+
+    numOut = ra[~insideMask].size
+    numKeep = np.around(thresh*numOut).astype(int)
+
+    ra_keep = ra[~insideMask][:numKeep]
+    dec_keep = dec[~insideMask][:numKeep]
+
+    rand_ra = np.concatenate([rand_ra, ra_keep])
+    rand_dec = np.concatenate([rand_dec, dec_keep])
+
+    return rand_ra, rand_dec
 
 def getGGL(lensCat, sourceCat):
     """
